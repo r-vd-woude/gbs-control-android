@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Compose supplies every colour and type style the UI uses; this theme only dresses the window
+      before the first frame. Display-cutout handling needs API 27 and lives in values-v27.
+    -->
+    <style name="Theme.GbsControl" parent="android:style/Theme.DeviceDefault.NoActionBar" />
+</resources>

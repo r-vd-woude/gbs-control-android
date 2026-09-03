@@ -1,0 +1,23 @@
+# Gradle / Android build output
+.gradle/
+.gradle-user/
+/build
+/app/build/
+/captures
+.externalNativeBuild
+.cxx
+
+# Local machine configuration
+local.properties
+*.iml
+/.idea/
+.DS_Store
+
+# Signing material: never commit a keystore or its passwords
+*.jks
+*.keystore
+keystore.properties
+
+# Device backups pulled from a GBS unit
+/data/
+*.bin

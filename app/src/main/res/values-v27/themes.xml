@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GbsControl" parent="android:style/Theme.DeviceDefault.NoActionBar">
+        <!-- Draw into the cutout area; MainActivity pairs this with enableEdgeToEdge(). -->
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

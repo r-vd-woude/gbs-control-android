@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The Compose UI carries its own copy; only the launcher label is needed as a resource. -->
+    <string name="app_name">GBS Control</string>
+</resources>

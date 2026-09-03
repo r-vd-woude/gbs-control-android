@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      The GBS device serves its web UI and its HTTP API over plain HTTP on the local network, and
+      the user may point the app at any hostname or LAN address, so cleartext cannot be narrowed to
+      a fixed domain list. This is the firmware's documented security scope: a trusted LAN only.
+    -->
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
+</network-security-config>
