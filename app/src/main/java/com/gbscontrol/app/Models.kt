@@ -38,7 +38,12 @@ data class PresetPage(
 )
 
 /** Outcome of a `POST /api/v1/command`; `status` is accepted, noop, invalid, busy or low_memory. */
-data class CommandResult(val ok: Boolean, val status: String) {
+data class CommandResult(
+    val ok: Boolean,
+    val status: String,
+    /** Target main-loop sequence for accepted API commands; null for the legacy transport. */
+    val sequence: Long? = null,
+) {
     val busy: Boolean get() = status == "busy"
     val lowMemory: Boolean get() = status == "low_memory"
 }
@@ -88,6 +93,14 @@ data class AppUiState(
 )
 
 enum class ControlChannel { ACTION, USER }
+
+/**
+ * How an API command is completed from the app's point of view.
+ *
+ * Incremental controls deliberately do not wait for every target sequence: a held button produces
+ * many small adjustments, and confirming each one would serialize the gesture behind state polls.
+ */
+enum class CommandConfirmation { STANDARD, SLOW, INCREMENTAL }
 
 /**
  * One user action, expressed for both transports.

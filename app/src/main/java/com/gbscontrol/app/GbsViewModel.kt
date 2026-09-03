@@ -45,7 +45,8 @@ class GbsViewModel(application: Application) : AndroidViewModel(application) {
             apiValue = option.apiValue,
             legacyCommand = option.command,
             legacyChannel = option.channel,
-        )
+        ),
+        confirmation = CommandConfirmation.SLOW,
     ) { it.copy(preset = option.label) }
 
     // The nine toggles API v1 implements. The repository compares against known state first, so a
@@ -88,13 +89,18 @@ class GbsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Cycles the scanline strength down in steps of 0x10, wrapping at 0x50, as the firmware does. */
-    fun cycleScanlineIntensity() = run("scanline_strength", 'K', ControlChannel.USER)
+    fun cycleScanlineIntensity() = run("scanline_strength", 'K', ControlChannel.USER, incremental = true)
 
     /** No API v1 equivalent; the alternate frame-lock method is a legacy-only action. */
     fun switchFrameLockMethod() = run(null, 'i', ControlChannel.USER)
 
     fun adjustGain(increase: Boolean) =
-        run(if (increase) "adc_gain_plus" else "adc_gain_minus", if (increase) 'n' else 'o', ControlChannel.USER)
+        run(
+            if (increase) "adc_gain_plus" else "adc_gain_minus",
+            if (increase) 'n' else 'o',
+            ControlChannel.USER,
+            incremental = true,
+        )
 
     fun resetColorDefaults() = run("color_defaults", 'U', ControlChannel.USER)
 
@@ -119,7 +125,7 @@ class GbsViewModel(application: Application) : AndroidViewModel(application) {
                 PictureDirection.DOWN -> Triple("border_down", 'D', ControlChannel.USER)
             }
         }
-        run(name, command, channel)
+        run(name, command, channel, incremental = true)
     }
 
     /**
@@ -134,11 +140,18 @@ class GbsViewModel(application: Application) : AndroidViewModel(application) {
             "pr_gain" -> if (increase) "pr_gain_plus" to 'P' else "pr_gain_minus" to 'S'
             else -> return
         }
-        run(name, command, ControlChannel.USER)
+        run(name, command, ControlChannel.USER, incremental = true)
     }
 
-    private fun run(apiName: String?, command: Char, channel: ControlChannel) =
-        repository.execute(DeviceCommand(apiName, null, command, channel))
+    private fun run(
+        apiName: String?,
+        command: Char,
+        channel: ControlChannel,
+        incremental: Boolean = false,
+    ) = repository.execute(
+        DeviceCommand(apiName, null, command, channel),
+        confirmation = if (incremental) CommandConfirmation.INCREMENTAL else CommandConfirmation.STANDARD,
+    )
 
     fun loadPreset(slot: PresetSlot) = repository.loadPreset(slot)
     fun savePreset(slot: PresetSlot, name: String) = repository.savePreset(slot, name)

@@ -227,7 +227,7 @@ object ApiJsonParser {
         val status = json.stringOrNull("status") ?: if (successfulCode) STATUS_ACCEPTED else "error"
         // `ok` is authoritative when present; anything else falls back to the status code.
         val ok = if (json.has("ok")) json.optBoolean("ok") else successfulCode
-        return CommandResult(ok, status)
+        return CommandResult(ok, status, json.longOrNull("sequence"))
     }
 
     const val STATUS_ACCEPTED = "accepted"

@@ -52,9 +52,13 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private val AppUiState.controlsBlocked: Boolean
+    get() = busy || status != ConnectionStatus.CONNECTED
+
 @Composable
 fun DevicesScreen(state: AppUiState, viewModel: GbsViewModel) {
     var address by rememberSaveable(state.host) { mutableStateOf(state.host) }
+    val connectionChangeEnabled = !state.busy && state.status != ConnectionStatus.CONNECTING
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
@@ -72,7 +76,7 @@ fun DevicesScreen(state: AppUiState, viewModel: GbsViewModel) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             )
             Spacer(Modifier.height(8.dp))
-            Button(onClick = { viewModel.connect(address) }, enabled = !state.busy) { Text("Connect") }
+            Button(onClick = { viewModel.connect(address) }, enabled = connectionChangeEnabled) { Text("Connect") }
         }
 
         if (state.discoveredDevices.isNotEmpty()) {
@@ -84,7 +88,8 @@ fun DevicesScreen(state: AppUiState, viewModel: GbsViewModel) {
                         append(device.host)
                         device.apiVersion?.let { append(" · API v$it") }
                     },
-                    connected = device.host == state.host,
+                    connected = device.host == state.host && state.status == ConnectionStatus.CONNECTED,
+                    enabled = connectionChangeEnabled,
                     onConnect = { viewModel.connect(device.host) },
                 )
             }
@@ -95,7 +100,8 @@ fun DevicesScreen(state: AppUiState, viewModel: GbsViewModel) {
             DeviceCard(
                 title = host,
                 subtitle = if (host == AppPrefs.DEFAULT_HOST) "Default mDNS address" else "Saved device",
-                connected = host == state.host,
+                connected = host == state.host && state.status == ConnectionStatus.CONNECTED,
+                enabled = connectionChangeEnabled,
                 onConnect = { viewModel.connect(host) },
                 onForget = if (host != state.host && host != AppPrefs.DEFAULT_HOST) ({ viewModel.forgetHost(host) }) else null,
             )
@@ -108,6 +114,7 @@ private fun DeviceCard(
     title: String,
     subtitle: String,
     connected: Boolean,
+    enabled: Boolean,
     onConnect: () -> Unit,
     onForget: (() -> Unit)? = null,
 ) {
@@ -120,8 +127,10 @@ private fun DeviceCard(
                 Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(subtitle, style = MaterialTheme.typography.bodySmall)
             }
-            if (onForget != null) TextButton(onClick = onForget) { Text("Forget") }
-            Button(onClick = onConnect, enabled = !connected) { Text(if (connected) "Connected" else "Connect") }
+            if (onForget != null) TextButton(onClick = onForget, enabled = enabled) { Text("Forget") }
+            Button(onClick = onConnect, enabled = enabled && !connected) {
+                Text(if (connected) "Connected" else "Connect")
+            }
         }
     }
 }
@@ -154,7 +163,10 @@ fun HomeScreen(state: AppUiState, viewModel: GbsViewModel) {
                 )
                 state.deviceInfo?.firmwareVersion?.let { Text("Firmware $it") }
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = viewModel::refresh) { Text("Refresh") }
+                OutlinedButton(
+                    onClick = viewModel::refresh,
+                    enabled = !state.busy && state.status != ConnectionStatus.CONNECTING,
+                ) { Text("Refresh") }
             }
         }
 
@@ -163,7 +175,7 @@ fun HomeScreen(state: AppUiState, viewModel: GbsViewModel) {
         InfoRow("Input", device.inputMode ?: "Not reported")
         InfoRow("Output", device.preset ?: "Waiting for state")
         InfoRow("Preset slot", device.slot?.toString() ?: "None")
-        NativeToggle("Scanlines", device.scanlines, state.busy, viewModel::setScanlines)
+        NativeToggle("Scanlines", device.scanlines, state.controlsBlocked, viewModel::setScanlines)
 
         SectionTitle("Output resolution")
         viewModel.resolutions.chunked(2).forEach { row ->
@@ -171,7 +183,7 @@ fun HomeScreen(state: AppUiState, viewModel: GbsViewModel) {
                 row.forEach { option ->
                     OutlinedButton(
                         onClick = { viewModel.selectResolution(option) },
-                        enabled = !state.busy,
+                        enabled = !state.controlsBlocked,
                         modifier = Modifier.weight(1f),
                     ) { Text(option.label) }
                 }
@@ -203,7 +215,10 @@ fun PresetsScreen(state: AppUiState, viewModel: GbsViewModel) {
                         Spacer(Modifier.width(8.dp))
                         Text("Show populated only")
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = viewModel::refresh) { Text("Refresh") }
+                        TextButton(
+                            onClick = viewModel::refresh,
+                            enabled = !state.busy && state.status != ConnectionStatus.CONNECTING,
+                        ) { Text("Refresh") }
                     }
                 }
             }
@@ -215,7 +230,7 @@ fun PresetsScreen(state: AppUiState, viewModel: GbsViewModel) {
             PresetCard(
                 slot = slot,
                 selected = state.deviceState.slot == slot.slot,
-                busy = state.busy,
+                busy = state.controlsBlocked,
                 onLoad = { viewModel.loadPreset(slot) },
                 onSave = { saveSlot = slot },
                 onRemove = { removeSlot = slot },
@@ -318,15 +333,15 @@ fun PictureScreen(state: AppUiState, viewModel: GbsViewModel) {
                 )
             }
         }
-        DirectionPad(enabled = !state.busy) { direction -> viewModel.adjustPicture(axis, direction) }
+        DirectionPad(enabled = !state.controlsBlocked) { direction -> viewModel.adjustPicture(axis, direction) }
 
         Divider()
         SectionTitle("ADC gain", state.deviceState.adcGain?.let { "Register 0x%02X".format(it) })
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RepeatButton("− Gain", !state.busy) { viewModel.adjustGain(false) }
-            RepeatButton("+ Gain", !state.busy) { viewModel.adjustGain(true) }
+            RepeatButton("− Gain", !state.controlsBlocked) { viewModel.adjustGain(false) }
+            RepeatButton("+ Gain", !state.controlsBlocked) { viewModel.adjustGain(true) }
         }
-        NativeToggle("Automatic gain", state.deviceState.autoGain, state.busy, viewModel::setAutoGain)
+        NativeToggle("Automatic gain", state.deviceState.autoGain, state.controlsBlocked, viewModel::setAutoGain)
 
         Divider()
         SectionTitle(
@@ -336,13 +351,13 @@ fun PictureScreen(state: AppUiState, viewModel: GbsViewModel) {
             if (state.protocol == ProtocolMode.API_V1) "Values are read back from the device."
             else "Legacy firmware cannot report the current values.",
         )
-        ColorControl("Brightness", "brightness", state.deviceState.brightness, state.busy, viewModel)
-        ColorControl("Contrast", "contrast", state.deviceState.contrast, state.busy, viewModel)
-        ColorControl("Pb / U gain", "pb_gain", state.deviceState.pbGain, state.busy, viewModel)
-        ColorControl("Pr / V gain", "pr_gain", state.deviceState.prGain, state.busy, viewModel)
+        ColorControl("Brightness", "brightness", state.deviceState.brightness, state.controlsBlocked, viewModel)
+        ColorControl("Contrast", "contrast", state.deviceState.contrast, state.controlsBlocked, viewModel)
+        ColorControl("Pb / U gain", "pb_gain", state.deviceState.pbGain, state.controlsBlocked, viewModel)
+        ColorControl("Pr / V gain", "pr_gain", state.deviceState.prGain, state.controlsBlocked, viewModel)
         OutlinedButton(
             onClick = viewModel::resetColorDefaults,
-            enabled = !state.busy,
+            enabled = !state.controlsBlocked,
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Restore colour defaults") }
     }
@@ -422,13 +437,17 @@ fun FiltersScreen(state: AppUiState, viewModel: GbsViewModel) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         SectionTitle("Filters", "Values are synchronized from the device over the live-state connection.")
-        NativeToggle("Scanlines", state.deviceState.scanlines, state.busy, viewModel::setScanlines)
-        ListAction("Scanline intensity", state.deviceState.scanlineStrength?.toString() ?: "Cycle legacy strength") {
+        NativeToggle("Scanlines", state.deviceState.scanlines, state.controlsBlocked, viewModel::setScanlines)
+        ListAction(
+            "Scanline intensity",
+            state.deviceState.scanlineStrength?.toString() ?: "Cycle legacy strength",
+            enabled = !state.controlsBlocked,
+        ) {
             viewModel.cycleScanlineIntensity()
         }
-        NativeToggle("Line filter", state.deviceState.lineFilter, state.busy, viewModel::setLineFilter)
-        NativeToggle("Peaking", state.deviceState.peaking, state.busy, viewModel::setPeaking)
-        NativeToggle("Step response", state.deviceState.stepResponse, state.busy, viewModel::setStepResponse)
+        NativeToggle("Line filter", state.deviceState.lineFilter, state.controlsBlocked, viewModel::setLineFilter)
+        NativeToggle("Peaking", state.deviceState.peaking, state.controlsBlocked, viewModel::setPeaking)
+        NativeToggle("Step response", state.deviceState.stepResponse, state.controlsBlocked, viewModel::setStepResponse)
         Divider(Modifier.padding(vertical = 8.dp))
         Text("Deinterlace", style = MaterialTheme.typography.titleMedium)
         listOf(DeinterlaceModes.MOTION_ADAPTIVE, DeinterlaceModes.BOB).forEach { mode ->
@@ -436,7 +455,7 @@ fun FiltersScreen(state: AppUiState, viewModel: GbsViewModel) {
                 RadioButton(
                     selected = state.deviceState.deinterlaceMode.equals(mode, ignoreCase = true),
                     onClick = { viewModel.setDeinterlace(mode) },
-                    enabled = !state.busy,
+                    enabled = !state.controlsBlocked,
                 )
                 Text(mode)
             }
@@ -451,15 +470,19 @@ fun SettingsScreen(state: AppUiState, viewModel: GbsViewModel, onLegacy: () -> U
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         SectionTitle("Device settings")
-        NativeToggle("Matched presets", state.deviceState.matchedPresets, state.busy, viewModel::setMatchedPresets)
-        NativeToggle("Full height", state.deviceState.fullHeight, state.busy, viewModel::setFullHeight)
-        NativeToggle("Low-res upscaling", state.deviceState.preferScalingRgbhv, state.busy, viewModel::setPreferScalingRgbhv)
-        NativeToggle("YPbPr component output", state.deviceState.outputComponent, state.busy, viewModel::setOutputComponent)
-        NativeToggle("Force PAL 50 Hz to 60 Hz", state.deviceState.palForce60, state.busy, viewModel::setPalForce60)
-        NativeToggle("Disable external clock", state.deviceState.externalClockDisabled, state.busy, viewModel::setExternalClockDisabled)
-        NativeToggle("ADC calibration", state.deviceState.calibrationAdc, state.busy, viewModel::setCalibrationAdc)
-        NativeToggle("Frame-time lock", state.deviceState.frameTimeLock, state.busy, viewModel::setFrameTimeLock)
-        ListAction("Switch frame-lock method", "Try the alternate method if the display shifts") {
+        NativeToggle("Matched presets", state.deviceState.matchedPresets, state.controlsBlocked, viewModel::setMatchedPresets)
+        NativeToggle("Full height", state.deviceState.fullHeight, state.controlsBlocked, viewModel::setFullHeight)
+        NativeToggle("Low-res upscaling", state.deviceState.preferScalingRgbhv, state.controlsBlocked, viewModel::setPreferScalingRgbhv)
+        NativeToggle("YPbPr component output", state.deviceState.outputComponent, state.controlsBlocked, viewModel::setOutputComponent)
+        NativeToggle("Force PAL 50 Hz to 60 Hz", state.deviceState.palForce60, state.controlsBlocked, viewModel::setPalForce60)
+        NativeToggle("Disable external clock", state.deviceState.externalClockDisabled, state.controlsBlocked, viewModel::setExternalClockDisabled)
+        NativeToggle("ADC calibration", state.deviceState.calibrationAdc, state.controlsBlocked, viewModel::setCalibrationAdc)
+        NativeToggle("Frame-time lock", state.deviceState.frameTimeLock, state.controlsBlocked, viewModel::setFrameTimeLock)
+        ListAction(
+            "Switch frame-lock method",
+            "Try the alternate method if the display shifts",
+            enabled = !state.controlsBlocked,
+        ) {
             viewModel.switchFrameLockMethod()
         }
 
@@ -494,13 +517,13 @@ private fun NativeToggle(label: String, value: Boolean?, busy: Boolean, onChange
 }
 
 @Composable
-private fun ListAction(label: String, detail: String, onClick: () -> Unit) {
+private fun ListAction(label: String, detail: String, enabled: Boolean, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(label)
             Text(detail, style = MaterialTheme.typography.labelSmall)
         }
-        OutlinedButton(onClick = onClick) { Text("Run") }
+        OutlinedButton(onClick = onClick, enabled = enabled) { Text("Run") }
     }
 }
 

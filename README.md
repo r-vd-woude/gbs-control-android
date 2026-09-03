@@ -31,6 +31,13 @@ preferred wherever it exists, because it reports state instead of blind-toggling
   current state before it dares send anything.
 - The input mode, scanline strength and the colour registers are only readable over API v1.
 - `409 busy` and `503 low_memory` come back as real messages instead of a silent failure.
+- Accepted commands carry a target sequence. The app polls state until the firmware main loop has
+  processed that sequence instead of assuming a fixed delay was long enough. Polling backs off
+  from 250 ms to 1 second; scaler-reprogramming preset and resolution commands get a 12-second
+  confirmation window.
+- Held picture and colour controls do not poll after every individual nudge. They use a one-entry
+  latest-wins queue, silently retry expected device backpressure once, and refresh state 650 ms
+  after the last accepted nudge. This keeps press-and-hold responsive without building a backlog.
 - The device advertises `_gbs-control._tcp` with an `api=1` TXT record, so discovery can tell a
   GBS board apart from every other HTTP responder on the network.
 
@@ -86,6 +93,8 @@ firmware contract changes, these tests are the first thing that should fail.
   direct LAN requests will need; that has to be handled before raising the target.
 - Colour and geometry controls step by one, because the scaler exposes no absolute register writes
   over either protocol. On API v1 the resulting value is read back and displayed.
+- Preset names are limited to 24 UTF-8 bytes to match the firmware's fixed 25-byte field (including
+  its terminating NUL); the app never splits a multibyte character at that boundary.
 - The application ID is `com.gbscontrol.app`. Settle on the permanent one before any signed or
   store release - it cannot be changed afterwards for an existing installation.
 

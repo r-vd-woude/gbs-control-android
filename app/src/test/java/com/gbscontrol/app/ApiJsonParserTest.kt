@@ -210,6 +210,7 @@ class ApiJsonParserTest {
         )
         assertTrue(result.ok)
         assertEquals("accepted", result.status)
+        assertEquals(13L, result.sequence)
         assertFalse(result.busy)
     }
 
