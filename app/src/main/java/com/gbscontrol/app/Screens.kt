@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -365,14 +364,28 @@ fun PictureScreen(state: AppUiState, viewModel: GbsViewModel) {
 
 @Composable
 private fun DirectionPad(enabled: Boolean, onDirection: (PictureDirection) -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-        RepeatButton("↑", enabled) { onDirection(PictureDirection.UP) }
-        Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Three equal-width cells per row: the vertical arrows land in the middle cell and so end up
+    // the same size as the horizontal pair instead of shrinking to fit their glyph.
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.weight(1f))
+            RepeatButton("↑", enabled) { onDirection(PictureDirection.UP) }
+            Spacer(Modifier.weight(1f))
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             RepeatButton("←", enabled) { onDirection(PictureDirection.LEFT) }
-            Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) { Text("•") }
+            Box(Modifier.weight(1f).height(52.dp), contentAlignment = Alignment.Center) { Text("•") }
             RepeatButton("→", enabled) { onDirection(PictureDirection.RIGHT) }
         }
-        RepeatButton("↓", enabled) { onDirection(PictureDirection.DOWN) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Spacer(Modifier.weight(1f))
+            RepeatButton("↓", enabled) { onDirection(PictureDirection.DOWN) }
+            Spacer(Modifier.weight(1f))
+        }
     }
 }
 
