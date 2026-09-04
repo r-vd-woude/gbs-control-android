@@ -70,6 +70,8 @@ data class DeviceState(
     val preferScalingRgbhv: Boolean? = null,
     val calibrationAdc: Boolean? = null,
     val externalClockDisabled: Boolean? = null,
+    val clockGeneratorDetected: Boolean? = null,
+    val clockWiring: String? = null,
     val pictureValid: Boolean? = null,
     val brightness: Int? = null,
     val contrast: Int? = null,

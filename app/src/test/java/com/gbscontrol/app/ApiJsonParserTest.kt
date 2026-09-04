@@ -24,7 +24,8 @@ class ApiJsonParserTest {
          "scanlineStrength":48,"lineFilter":true,"peaking":true,"stepResponse":true,
          "autoGain":false,"frameTimeLock":true,"deinterlaceMode":"motion_adaptive",
          "outputComponent":false,"fullHeight":true,"matchedPresets":false,"palForce60":false,
-         "tap6":false,"scalingRgbhv":false,"externalClockGen":true,"customPreset":false,
+         "tap6":false,"scalingRgbhv":false,"externalClockGen":true,
+         "clockGeneratorDetected":true,"clockWiring":"mcbazel","customPreset":false,
          "picture":{"valid":true,"brightness":0,"contrast":128,"pbGain":28,"prGain":41,
                     "adcGain":57,"hScale":512,"vScale":512},
          "memory":{"heap":31000,"heapMin":26000,"maxBlock":18000,"heapFrag":11,"uptime":384}}
@@ -85,6 +86,8 @@ class ApiJsonParserTest {
         assertTrue(state.fullHeight!!)
         assertFalse(state.matchedPresets!!)
         assertEquals(31000, state.freeHeap)
+        assertTrue(state.clockGeneratorDetected!!)
+        assertEquals("mcbazel", state.clockWiring)
     }
 
     @Test

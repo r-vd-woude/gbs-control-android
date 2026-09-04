@@ -508,6 +508,10 @@ fun SettingsScreen(state: AppUiState, viewModel: GbsViewModel, onLegacy: () -> U
         state.deviceInfo?.capabilities?.takeIf { it.isNotEmpty() }?.let {
             InfoRow("Capabilities", it.sorted().joinToString())
         }
+        state.deviceState.clockGeneratorDetected?.let {
+            InfoRow("Clock generator", if (it) "Detected" else "Not detected")
+        }
+        state.deviceState.clockWiring?.let { InfoRow("Clock wiring", clockWiringLabel(it)) }
 
         Divider(Modifier.padding(vertical = 12.dp))
         SectionTitle("Advanced", "Use the original firmware interface for Wi-Fi, backup, restore and firmware update.")
@@ -546,6 +550,13 @@ private fun InfoRow(label: String, value: String) {
         Text(label, modifier = Modifier.width(110.dp), style = MaterialTheme.typography.labelLarge)
         Text(value, modifier = Modifier.weight(1f))
     }
+}
+
+private fun clockWiringLabel(wiring: String): String = when (wiring) {
+    "standard" -> "Standard"
+    "mcbazel" -> "McBazel reversed"
+    "unknown" -> "Unknown"
+    else -> wiring
 }
 
 @Composable

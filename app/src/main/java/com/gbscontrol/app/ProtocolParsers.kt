@@ -178,6 +178,8 @@ object ApiJsonParser {
             calibrationAdc = null,
             // The firmware reports whether the generator is enabled; the UI toggles the opposite.
             externalClockDisabled = root.boolOrNull("externalClockGen")?.not(),
+            clockGeneratorDetected = root.boolOrNull("clockGeneratorDetected"),
+            clockWiring = root.stringOrNull("clockWiring"),
             pictureValid = pictureValid,
             brightness = readable?.intOrNull("brightness"),
             contrast = readable?.intOrNull("contrast"),
