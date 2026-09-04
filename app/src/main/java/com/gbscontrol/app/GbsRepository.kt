@@ -315,19 +315,55 @@ class GbsRepository(
         }
     }
 
-    /**
-     * Saving and removing presets are not part of API v1; the firmware keeps serving the legacy
-     * `/slot/save` and `/slot/remove` routes on every version, so these always take that path.
-     */
+    /** Saves the scaler snapshot first, then updates the slot's display metadata. */
     fun savePreset(slot: PresetSlot, name: String) {
         val connection = currentConnection() ?: return
         scope.launch {
             withCommandLock(connection, refreshPresets = true) {
                 val safeName = truncateUtf8(name, PRESET_NAME_MAX_BYTES)
                 val encoded = URLEncoder.encode(safeName, Charsets.UTF_8.name())
-                client.get(connection.host, "/slot/save?index=${slot.index}&name=$encoded").toCommandResult()
+                val metadataPath = "/slot/save?index=${slot.index}&name=$encoded"
+
+                if (connection.protocol == ProtocolMode.API_V1) {
+                    // New firmware selects the destination and snapshots the registers in one
+                    // main-loop command. If an older API-v1 build does not know this command,
+                    // retain compatibility by using the complete legacy sequence below.
+                    val result = sendApiCommand(connection.host, "save_preset", slot.slot.toString())
+                    if (result.ok) {
+                        if (!awaitApiSequence(connection, result.sequence, API_SLOW_CONFIRM_TIMEOUT_MS) &&
+                            isCurrent(connection)
+                        ) {
+                            return@withCommandLock CommandResult(
+                                false,
+                                "confirmation_timeout",
+                                result.sequence,
+                            )
+                        }
+                        if (!isCurrent(connection)) {
+                            return@withCommandLock CommandResult(false, "connection_changed")
+                        }
+                        return@withCommandLock client.get(connection.host, metadataPath).toCommandResult()
+                    }
+                    if (result.status != "invalid") return@withCommandLock result
+                }
+
+                savePresetLegacy(connection, slot, metadataPath)
             }
         }
+    }
+
+    private suspend fun savePresetLegacy(
+        connection: ActiveConnection,
+        slot: PresetSlot,
+        metadataPath: String,
+    ): CommandResult {
+        val selected = client.get(connection.host, "/slot/set?slot=${slot.slot}").toCommandResult()
+        if (!selected.ok) return selected
+
+        val metadata = client.get(connection.host, metadataPath).toCommandResult()
+        if (!metadata.ok) return metadata
+
+        return sendLegacyCommand(connection.host, ControlChannel.USER, '4')
     }
 
     fun removePreset(slot: PresetSlot) {

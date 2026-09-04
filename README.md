@@ -13,7 +13,7 @@ Wi-Fi provisioning, backup and restore, and firmware update.
 | --- | --- |
 | **Devices** | mDNS discovery of `_gbs-control._tcp`, manual address entry, remembered devices |
 | **Home** | signal, input mode, output preset, active slot, quick scanlines |
-| **Presets** | all 72 slots — load, save, rename, remove |
+| **Presets** | all 72 slots — load, save complete scaler snapshots, rename, remove |
 | **Picture** | move / scale / border pads, ADC gain, colour nudges |
 | **Filters** | scanlines and strength, line filter, peaking, step response, deinterlace |
 | **Settings** | output resolution, device toggles, device info, web interface |
