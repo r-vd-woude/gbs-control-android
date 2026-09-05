@@ -2,10 +2,8 @@ package com.gbscontrol.app
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -20,7 +18,7 @@ data class HttpResult(val code: Int, val body: ByteArray) {
     fun text(): String = body.toString(Charsets.UTF_8)
 }
 
-/** Small LAN-only transport. Protocol policy and fallback live in [GbsRepository]. */
+/** HTTP commands and the live state socket. */
 class GbsClient {
     private val webSocketClient = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
@@ -45,15 +43,17 @@ class GbsClient {
                     connectTimeout = TIMEOUT_MS
                     readTimeout = TIMEOUT_MS
                     requestMethod = method
+                    instanceFollowRedirects = false
                     useCaches = false
                     setRequestProperty("Accept", "application/json, application/octet-stream;q=0.9, */*;q=0.1")
                     setRequestProperty("Cache-Control", "no-cache")
                     if (body != null) {
                         doOutput = true
                         setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-                        outputStream.use { it.write(body) }
+                        setFixedLengthStreamingMode(body.size)
                     }
                 }
+                if (body != null) connection.outputStream.use { it.write(body) }
                 val code = connection.responseCode
                 val stream = if (code in 200..299) connection.inputStream else connection.errorStream
                 HttpResult(code, stream?.use { it.readBytes() } ?: ByteArray(0))

@@ -198,7 +198,10 @@ fun PresetsScreen(state: AppUiState, viewModel: GbsViewModel) {
     var populatedOnly by rememberSaveable { mutableStateOf(true) }
     var saveSlot by remember { mutableStateOf<PresetSlot?>(null) }
     var removeSlot by remember { mutableStateOf<PresetSlot?>(null) }
-    val visible = if (populatedOnly) state.presets.filterNot(PresetSlot::empty) else state.presets
+    val populatedCount = remember(state.presets) { state.presets.count { !it.empty } }
+    val visible = remember(state.presets, populatedOnly) {
+        if (populatedOnly) state.presets.filterNot(PresetSlot::empty) else state.presets
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -208,7 +211,10 @@ fun PresetsScreen(state: AppUiState, viewModel: GbsViewModel) {
         stickyHeader {
             Surface {
                 Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                    SectionTitle("Preset slots", "${state.presets.count { !it.empty }} populated of ${state.presets.size}")
+                    SectionTitle("Preset slots", "$populatedCount populated of ${state.presets.size}")
+                    state.presetFeedback?.let { feedback ->
+                        Text(feedback, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp))
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(checked = populatedOnly, onCheckedChange = { populatedOnly = it })
                         Spacer(Modifier.width(8.dp))
@@ -304,12 +310,17 @@ private fun NamePresetDialog(slot: PresetSlot, onDismiss: () -> Unit, onSave: (S
         text = {
             OutlinedTextField(
                 value = name,
-                onValueChange = { name = it.take(24) },
+                onValueChange = { name = truncateUtf8(it, 24) },
                 label = { Text("Preset name") },
                 singleLine = true,
             )
         },
-        confirmButton = { TextButton(onClick = { onSave(name.trim()) }, enabled = name.isNotBlank()) { Text("Save") } },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(name.trim()) },
+                enabled = name.isNotBlank() && !name.trim().equals("Empty", ignoreCase = true),
+            ) { Text("Save") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

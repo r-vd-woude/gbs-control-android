@@ -6,11 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * The fixtures below are the documents the firmware actually emits, copied from the "HTTP API v1"
- * section of the firmware README. If the firmware contract changes, these tests are the first
- * thing that should fail.
- */
+/** Fixtures follow the firmware API. */
 class ApiJsonParserTest {
 
     private val deviceJson = """
@@ -122,6 +118,7 @@ class ApiJsonParserTest {
         assertTrue(state.pictureValid!!)
         assertEquals(0, state.brightness)
         assertEquals(128, state.contrast)
+        assertTrue(state.pictureValid!!)
         assertEquals(28, state.pbGain)
         assertEquals(41, state.prGain)
         assertEquals(57, state.adcGain)
@@ -246,8 +243,29 @@ class ApiJsonParserTest {
     }
 
     @Test
-    fun `falls back to the status code for a non-JSON body`() {
-        assertTrue(ApiJsonParser.commandResult(200, "").ok)
+    fun `does not accept an empty or HTML reply as a successful API command`() {
+        assertFalse(ApiJsonParser.commandResult(200, "").ok)
+        assertEquals("invalid_response", ApiJsonParser.commandResult(200, "<html>GBS Control</html>").status)
         assertFalse(ApiJsonParser.commandResult(500, "internal error").ok)
+    }
+
+    @Test
+    fun `requires an explicit result and a valid accepted sequence`() {
+        assertFalse(ApiJsonParser.commandResult(200, """{}""").ok)
+        assertFalse(ApiJsonParser.commandResult(200, """{"ok":true,"status":"accepted"}""").ok)
+        assertFalse(ApiJsonParser.commandResult(200, """{"ok":true,"status":"accepted","sequence":"bad"}""").ok)
+        assertFalse(ApiJsonParser.commandResult(200, """{"ok":true,"status":"accepted","sequence":-1}""").ok)
+        assertFalse(ApiJsonParser.commandResult(200, """{"ok":true,"status":"accepted","sequence":1.5}""").ok)
+        assertFalse(ApiJsonParser.commandResult(500, """{"ok":true,"status":"accepted","sequence":1}""").ok)
+    }
+
+    @Test
+    fun `reads sequence-only replies without dropping existing state`() {
+        val state = ApiJsonParser.state(stateJson).merge(ApiJsonParser.state("""{"sequence":13}"""))
+        assertEquals(13L, state.sequence)
+        assertEquals('A', state.slot)
+        assertEquals("1280x720", state.preset)
+        assertEquals(128, state.contrast)
+        assertTrue(state.pictureValid!!)
     }
 }

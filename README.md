@@ -22,6 +22,14 @@ State comes from `GET /api/v1/state` plus the device's WebSocket feed, so the sw
 board is actually doing rather than what the app last sent. Commands are confirmed against the
 device's `sequence` counter before they are reported as done.
 
+Preset progress and results stay on the Presets screen. Loading also checks that the selected slot
+is running as a custom preset. Saving confirms the command and updates the slot name, but the
+firmware does not yet report whether the snapshot file was written successfully.
+
+Confirmation uses `GET /api/v1/state?sequenceOnly=1`, then reads full state once. RC6 ignores the
+option; newer firmware returns just the counter without extending picture-register sampling.
+After saving, the app refreshes one slot instead of downloading all nine preset pages.
+
 ## Building
 
 Requires **JDK 17** — a full JDK, not a JRE, because the Android Gradle Plugin runs `jlink` — and the

@@ -26,6 +26,15 @@ class ProtocolSafetyTest {
     }
 
     @Test
+    fun `UTF-8 truncation handles empty input and unpaired surrogates`() {
+        assertEquals("", truncateUtf8("name", 0))
+        assertEquals("", truncateUtf8("", 24))
+        assertEquals("\ud800", truncateUtf8("\ud800x", 1))
+        assertEquals("\udc00", truncateUtf8("\udc00x", 1))
+        assertEquals("", truncateUtf8("\ud83d\ude42", 3))
+    }
+
+    @Test
     fun `confirmation polling backs off and caps at one second`() {
         assertEquals(250L, confirmationPollDelayMs(0))
         assertEquals(400L, confirmationPollDelayMs(1))

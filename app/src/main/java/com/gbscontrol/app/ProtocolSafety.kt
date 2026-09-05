@@ -1,32 +1,33 @@
 package com.gbscontrol.app
 
-/**
- * Truncates text to the firmware slot-name field without splitting a UTF-8 code point.
- * The on-device field is 25 bytes including its terminating NUL, not 25 Kotlin characters.
- */
+/** Slot names allow 24 UTF-8 bytes, not 24 characters. */
 internal fun truncateUtf8(value: String, maxBytes: Int): String {
     require(maxBytes >= 0) { "maxBytes must not be negative" }
-    val result = StringBuilder()
     var byteCount = 0
     var index = 0
     while (index < value.length) {
         val codePoint = value.codePointAt(index)
-        val encoded = String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8)
-        if (byteCount + encoded.size > maxBytes) break
-        result.appendCodePoint(codePoint)
-        byteCount += encoded.size
+        val bytes = when {
+            codePoint <= 0x7f -> 1
+            codePoint <= 0x7ff -> 2
+            codePoint in 0xd800..0xdfff -> 1 // UTF-8 replaces an unpaired surrogate with '?'.
+            codePoint <= 0xffff -> 3
+            else -> 4
+        }
+        if (byteCount + bytes > maxBytes) break
+        byteCount += bytes
         index += Character.charCount(codePoint)
     }
-    return result.toString()
+    return value.substring(0, index)
 }
 
-/** Unsigned 32-bit comparison that remains correct when the firmware sequence wraps to zero. */
+/** Compare unsigned sequences, including wraparound. */
 internal fun sequenceHasReached(current: Long, target: Long): Boolean {
     val delta = (current - target) and UINT32_MASK
     return delta < UINT32_HALF_RANGE
 }
 
-/** Backoff used when confirming that the firmware main loop completed an accepted command. */
+/** Back off while waiting for a command. */
 internal fun confirmationPollDelayMs(attempt: Int): Long {
     require(attempt >= 0) { "attempt must not be negative" }
     return CONFIRMATION_POLL_DELAYS_MS[minOf(attempt, CONFIRMATION_POLL_DELAYS_MS.lastIndex)]

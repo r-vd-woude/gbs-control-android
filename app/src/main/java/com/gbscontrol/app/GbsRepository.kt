@@ -1,6 +1,7 @@
 package com.gbscontrol.app
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
@@ -12,10 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.atomic.AtomicLong
 
-/** Names used to look a toggle up in [DeviceState]; the API v1 command names double as keys. */
+/** State keys for legacy-only toggles. */
 object StateKeys {
     const val PAL_FORCE_60 = "palForce60"
     const val SCALING_RGBHV = "scalingRgbhv"
@@ -54,8 +56,7 @@ class GbsRepository(
         val optimistic: (DeviceState) -> DeviceState,
     )
 
-    // One request may wait behind the in-flight nudge. New repeats replace that waiting request,
-    // preventing a long tail of stale adjustments after the user releases the button.
+    // Keep one waiting nudge. Replace it when a newer repeat arrives.
     private val incrementalCommands = Channel<IncrementalRequest>(
         capacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -103,6 +104,7 @@ class GbsRepository(
                 presets = emptyList(),
                 busy = false,
                 message = null,
+                presetFeedback = null,
             )
         }
 
@@ -130,8 +132,7 @@ class GbsRepository(
             )
         }
         if (reached) {
-            // The legacy state socket is served by API v1 firmware too, and it is the only source
-            // for the four legacy-only toggles, so it is opened in both modes.
+            // Legacy-only settings still need the socket on API firmware.
             openStateSocket(normalized, generation)
             if (protocol == ProtocolMode.API_V1) {
                 scope.launch { settlePictureState(normalized, generation) }
@@ -175,29 +176,42 @@ class GbsRepository(
             onClosed = { reason ->
                 if (isCurrent(target, generation) && mutableUiState.value.status == ConnectionStatus.CONNECTED) {
                     updateIfCurrent(target, generation) {
-                        it.copy(message = reason?.let { text -> "Live state: $text" })
+                        val socketMessage = reason?.takeIf(String::isNotBlank)?.let { text -> "Live state: $text" }
+                        it.copy(message = it.message ?: socketMessage)
                     }
                 }
             },
         )
     }
 
-    private suspend fun readApiState(target: String, generation: Long): DeviceState? = runCatching {
-        val response = client.get(target, "/api/v1/state")
-        if (!response.successful) return@runCatching null
+    private suspend fun fetchApiState(
+        target: String,
+        generation: Long,
+        sequenceOnly: Boolean = false,
+    ): DeviceState {
+        val path = if (sequenceOnly) "/api/v1/state?sequenceOnly=1" else "/api/v1/state"
+        val response = client.get(target, path)
+        if (!response.successful) throw IOException("State request failed (HTTP ${response.code})")
         val state = ApiJsonParser.state(response.text())
+        if (state.sequence == null || state.sequence !in 0..0xffff_ffffL) {
+            throw IOException("State reply has no valid command sequence")
+        }
         updateIfCurrent(target, generation) { it.copy(deviceState = it.deviceState.merge(state)) }
-        state
-    }.getOrNull()
+        return state
+    }
+
+    private suspend fun readApiState(target: String, generation: Long): DeviceState? = try {
+        fetchApiState(target, generation)
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        null
+    }
 
     private suspend fun refreshApiState(target: String, generation: Long): Boolean =
         readApiState(target, generation) != null
 
-    /**
-     * The device only samples the picture registers in its main loop while an API client is asking,
-     * so the first state document after a quiet period reports `picture.valid = false`. One delayed
-     * re-read is enough to fill the colour values in.
-     */
+    /** Give loop() time to take its first picture sample. */
     private suspend fun settlePictureState(target: String, generation: Long) {
         if (!isCurrent(target, generation) || mutableUiState.value.deviceState.pictureValid == true) return
         delay(PICTURE_SETTLE_MS)
@@ -238,6 +252,17 @@ class GbsRepository(
         true
     }.getOrDefault(false)
 
+    private suspend fun refreshSavedSlot(connection: ActiveConnection, index: Int): Boolean {
+        val response = client.get(connection.host, "/api/v1/presets?offset=$index&limit=1")
+        if (!response.successful) return false
+        val slot = ApiJsonParser.presets(response.text()).items.singleOrNull { it.index == index }
+            ?: return false
+        updateIfCurrent(connection) { current ->
+            current.copy(presets = (current.presets.filterNot { it.index == index } + slot).sortedBy(PresetSlot::index))
+        }
+        return true
+    }
+
     fun execute(
         command: DeviceCommand,
         confirmation: CommandConfirmation = CommandConfirmation.STANDARD,
@@ -272,11 +297,7 @@ class GbsRepository(
         }
     }
 
-    /**
-     * Sends only when the device is known to be in the other position. API v1 would answer `noop`
-     * anyway, but skipping the request also keeps legacy firmware - where every command is a blind
-     * toggle - from flipping a setting the user did not touch.
-     */
+    /** Don't send a legacy toggle when the setting already matches. */
     fun setToggle(stateKey: String, desired: Boolean, command: DeviceCommand) {
         if (mutableUiState.value.deviceState.option(stateKey) == desired) return
         execute(command) { it.withOption(stateKey, desired) }
@@ -285,24 +306,24 @@ class GbsRepository(
     fun loadPreset(slot: PresetSlot) {
         val connection = currentConnection() ?: return
         scope.launch {
-            withCommandLock(connection) {
+            withCommandLock(connection, presetAction = "Load slot ${slot.slot}") {
                 var result = if (connection.protocol == ProtocolMode.API_V1) {
-                    // API v1 takes the slot character, not the index, and makes it the startup preset.
+                    // The API takes a slot character, not an index.
                     sendApiCommand(connection.host, "activate_preset", slot.slot.toString())
                 } else {
-                    val selected = client.get(connection.host, "/slot/set?slot=${slot.slot}").successful
-                    if (selected) {
+                    val selected = client.get(connection.host, "/slot/set?slot=${slot.slot}").toCommandResult()
+                    if (selected.ok) {
                         sendLegacyCommand(connection.host, ControlChannel.USER, '3')
                     } else {
-                        CommandResult(false, "error")
+                        selected
                     }
                 }
                 if (result.ok && isCurrent(connection)) {
                     if (connection.protocol == ProtocolMode.API_V1) {
-                        if (!awaitApiSequence(connection, result.sequence, API_SLOW_CONFIRM_TIMEOUT_MS) &&
+                        if (!awaitApiSequence(connection, result.sequence, API_SLOW_CONFIRM_TIMEOUT_MS, slot.slot) &&
                             isCurrent(connection)
                         ) {
-                            result = CommandResult(false, "confirmation_timeout", result.sequence)
+                            result = CommandResult(false, "preset_not_loaded", result.sequence)
                         }
                     } else {
                         updateIfCurrent(connection) {
@@ -319,15 +340,21 @@ class GbsRepository(
     fun savePreset(slot: PresetSlot, name: String) {
         val connection = currentConnection() ?: return
         scope.launch {
-            withCommandLock(connection, refreshPresets = true) {
-                val safeName = truncateUtf8(name, PRESET_NAME_MAX_BYTES)
+            withCommandLock(
+                connection,
+                refreshPresets = true,
+                presetAction = "Save slot ${slot.slot}",
+                savedSlotIndex = slot.index,
+            ) {
+                val safeName = truncateUtf8(name.trim(), PRESET_NAME_MAX_BYTES)
+                require(safeName.isNotBlank() && !safeName.equals("Empty", ignoreCase = true)) {
+                    "Choose a preset name other than Empty"
+                }
                 val encoded = URLEncoder.encode(safeName, Charsets.UTF_8.name())
                 val metadataPath = "/slot/save?index=${slot.index}&name=$encoded"
 
                 if (connection.protocol == ProtocolMode.API_V1) {
-                    // New firmware selects the destination and snapshots the registers in one
-                    // main-loop command. If an older API-v1 build does not know this command,
-                    // retain compatibility by using the complete legacy sequence below.
+                    // Older API builds need the legacy save sequence.
                     val result = sendApiCommand(connection.host, "save_preset", slot.slot.toString())
                     if (result.ok) {
                         if (!awaitApiSequence(connection, result.sequence, API_SLOW_CONFIRM_TIMEOUT_MS) &&
@@ -342,7 +369,11 @@ class GbsRepository(
                         if (!isCurrent(connection)) {
                             return@withCommandLock CommandResult(false, "connection_changed")
                         }
-                        return@withCommandLock client.get(connection.host, metadataPath).toCommandResult()
+                        val metadata = client.get(connection.host, metadataPath).toCommandResult()
+                        if (!metadata.ok) {
+                            throw IOException("Save command completed, but slot details failed: ${metadata.describe()}")
+                        }
+                        return@withCommandLock metadata
                     }
                     if (result.status != "invalid") return@withCommandLock result
                 }
@@ -369,10 +400,10 @@ class GbsRepository(
     fun removePreset(slot: PresetSlot) {
         val connection = currentConnection() ?: return
         scope.launch {
-            withCommandLock(connection, refreshPresets = true) {
-                // The firmware clears the selected slot in two steps, as the web UI does.
-                val selected = client.get(connection.host, "/slot/set?slot=${slot.slot}")
-                if (!selected.successful) return@withCommandLock CommandResult(false, "error")
+            withCommandLock(connection, refreshPresets = true, presetAction = "Remove slot ${slot.slot}") {
+                // Legacy removal takes two requests.
+                val selected = client.get(connection.host, "/slot/set?slot=${slot.slot}").toCommandResult()
+                if (!selected.ok) return@withCommandLock selected
                 val first = client.get(connection.host, "/slot/remove?0").toCommandResult()
                 if (!first.ok) return@withCommandLock first
                 delay(REMOVE_STEP_MS)
@@ -384,6 +415,8 @@ class GbsRepository(
     private suspend fun withCommandLock(
         connection: ActiveConnection,
         refreshPresets: Boolean = false,
+        presetAction: String? = null,
+        savedSlotIndex: Int? = null,
         block: suspend () -> CommandResult,
     ) {
         if (!isCurrent(connection)) return
@@ -391,21 +424,48 @@ class GbsRepository(
             updateIfCurrent(connection) { it.copy(message = "A command is already in progress") }
             return
         }
-        updateIfCurrent(connection) { it.copy(busy = true, message = null) }
+        updateIfCurrent(connection) {
+            it.copy(
+                busy = true,
+                message = null,
+                presetFeedback = presetAction?.let { action -> "$action: working..." } ?: it.presetFeedback,
+            )
+        }
         try {
             val result = block()
             if (result.ok && refreshPresets && isCurrent(connection)) {
-                if (connection.protocol == ProtocolMode.API_V1) {
-                    refreshApiPresets(connection.host, connection.generation)
+                val refreshed = if (connection.protocol == ProtocolMode.API_V1) {
+                    if (savedSlotIndex != null) refreshSavedSlot(connection, savedSlotIndex)
+                    else refreshApiPresets(connection.host, connection.generation)
                 } else {
                     refreshLegacyPresets(connection.host, connection.generation)
                 }
+                if (!refreshed) throw IOException("Command completed, but the preset list could not be refreshed")
             }
-            if (!result.ok && isCurrent(connection)) {
-                updateIfCurrent(connection) { it.copy(message = result.describe()) }
+            if (isCurrent(connection)) {
+                val feedback = when {
+                    !result.ok -> result.describe()
+                    connection.protocol == ProtocolMode.LEGACY || result.status == "sent" ->
+                        "Command sent; legacy firmware does not confirm completion"
+                    else -> "Command completed"
+                }
+                updateIfCurrent(connection) {
+                    it.copy(
+                        message = if (!result.ok) feedback else it.message,
+                        presetFeedback = presetAction?.let { action -> "$action: $feedback" } ?: it.presetFeedback,
+                    )
+                }
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Exception) {
-            updateIfCurrent(connection) { it.copy(message = error.message ?: "Command failed") }
+            val feedback = error.message ?: "Command failed"
+            updateIfCurrent(connection) {
+                it.copy(
+                    message = feedback,
+                    presetFeedback = presetAction?.let { action -> "$action: $feedback" } ?: it.presetFeedback,
+                )
+            }
         } finally {
             updateIfCurrent(connection) { it.copy(busy = false) }
             commandMutex.unlock()
@@ -431,7 +491,8 @@ class GbsRepository(
     private suspend fun sendLegacyCommand(target: String, channel: ControlChannel, command: Char): CommandResult {
         val route = if (channel == ControlChannel.ACTION) "/sc" else "/uc"
         val key = URLEncoder.encode(command.toString(), Charsets.UTF_8.name())
-        return client.get(target, "$route?$key").toCommandResult()
+        val result = client.get(target, "$route?$key").toCommandResult()
+        return if (result.ok) result.copy(status = "sent") else result
     }
 
     private suspend fun processIncrementalCommands() {
@@ -441,8 +502,7 @@ class GbsRepository(
             try {
                 var result = send(request.command, connection)
                 if (result.busy && isCurrent(connection)) {
-                    // A previous nudge can still occupy the firmware's one-entry command queue
-                    // after its HTTP response. Retry once; a continuing hold supplies later tries.
+                    // The previous nudge may still be running. Retry busy once.
                     delay(INCREMENTAL_BUSY_RETRY_MS)
                     if (isCurrent(connection)) result = send(request.command, connection)
                 }
@@ -478,30 +538,52 @@ class GbsRepository(
         connection: ActiveConnection,
         targetSequence: Long?,
         timeoutMs: Long,
+        loadedSlot: Char? = null,
     ): Boolean {
-        // Older or non-conforming API responses may omit the target. Preserve compatibility by
-        // doing one state refresh, but only the sequence-bearing response can prove completion.
+        // Legacy-only commands have no sequence, even on API firmware.
         if (targetSequence == null) {
             return refreshApiState(connection.host, connection.generation)
         }
 
         val deadline = System.nanoTime() + timeoutMs * NANOS_PER_MILLISECOND
         var pollAttempt = 0
+        var sequenceReached = false
+        var lastError: Exception? = null
         while (true) {
             if (!isCurrent(connection)) return false
             val remainingNanos = deadline - System.nanoTime()
-            if (remainingNanos <= 0) return false
+            if (remainingNanos <= 0) break
             val delayMs = minOf(
                 confirmationPollDelayMs(pollAttempt++),
                 (remainingNanos / NANOS_PER_MILLISECOND).coerceAtLeast(1L),
             )
             delay(delayMs)
-            if (System.nanoTime() >= deadline || !isCurrent(connection)) return false
-            val state = readApiState(connection.host, connection.generation)
+            if (System.nanoTime() >= deadline) break
             if (!isCurrent(connection)) return false
-            val current = state?.sequence
-            if (current != null && sequenceHasReached(current, targetSequence)) return true
+            try {
+                var polledState: DeviceState? = null
+                // RC6 ignores sequenceOnly and returns full state; newer firmware skips picture reads.
+                if (!sequenceReached) {
+                    val state = fetchApiState(connection.host, connection.generation, sequenceOnly = true)
+                    polledState = state
+                    sequenceReached = state.sequence?.let { sequenceHasReached(it, targetSequence) } == true
+                }
+                if (sequenceReached) {
+                    val state = polledState?.takeIf { it.presetCode != null }
+                        ?: fetchApiState(connection.host, connection.generation)
+                    if (!isCurrent(connection)) return false
+                    // RGBHV loads finish later in the sync watcher. Don't confirm a built-in fallback.
+                    if (loadedSlot == null || (state.slot == loadedSlot && state.presetCode == '9')) return true
+                }
+                lastError = null
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                lastError = error
+            }
         }
+        lastError?.let { throw IOException("Could not check command completion: ${it.message}", it) }
+        return false
     }
 
     private fun currentConnection(): ActiveConnection? {
@@ -539,11 +621,14 @@ class GbsRepository(
         }
     }
 
-    /** Legacy routes answer an empty body, a bare `true`/`false`, or nothing but a status code. */
+    /** Legacy success replies are empty or 'true'. */
     private fun HttpResult.toCommandResult(): CommandResult {
         if (!successful) return CommandResult(false, "http_$code")
         val payload = text().trim()
         if (payload.equals("false", ignoreCase = true)) return CommandResult(false, "rejected")
+        if (payload.isNotEmpty() && !payload.equals("true", ignoreCase = true)) {
+            return CommandResult(false, "invalid_response")
+        }
         return CommandResult(true, ApiJsonParser.STATUS_ACCEPTED)
     }
 
@@ -570,7 +655,7 @@ class GbsRepository(
         const val INCREMENTAL_BUSY_RETRY_MS = 100L
         const val INCREMENTAL_REFRESH_DEBOUNCE_MS = 650L
 
-        /** The device re-reads the picture registers every 500 ms while an API client is asking. */
+        // Allow one 500 ms picture-sampling interval.
         const val PICTURE_SETTLE_MS = 700L
 
         const val REMOVE_STEP_MS = 250L
@@ -583,6 +668,9 @@ private fun CommandResult.describe(): String = when {
     lowMemory -> "The device is low on memory; try again in a moment"
     status == "invalid" -> "The device rejected that command"
     status == "confirmation_timeout" -> "The device accepted the command but did not confirm completion"
+    status == "preset_not_loaded" -> "The selected preset was not confirmed as loaded. Check the saved slot and input signal."
+    status == "invalid_response" -> "The device returned an invalid command reply"
+    status.startsWith("http_") -> "Device request failed (HTTP ${status.removePrefix("http_")})"
     else -> "Command was rejected"
 }
 
@@ -620,7 +708,7 @@ private fun DeviceState.withOption(name: String, value: Boolean): DeviceState = 
     else -> this
 }
 
-/** Field-wise fill-in, so a WebSocket frame never erases values only the API reports, and back. */
+/** Keep fields that the other transport doesn't report. */
 internal fun DeviceState.merge(new: DeviceState) = DeviceState(
     sequence = new.sequence ?: sequence,
     preset = new.preset ?: preset,

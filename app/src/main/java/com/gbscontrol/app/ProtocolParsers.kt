@@ -3,11 +3,7 @@ package com.gbscontrol.app
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Labels shared by both transports. The firmware reports the same preset digit in byte 1 of the
- * legacy WebSocket frame and in `preset` of `GET /api/v1/state`, so one table serves both and the
- * UI never has to know which transport a value arrived on.
- */
+/** HTTP and WebSocket state use the same preset digits. */
 object PresetLabels {
     const val UNKNOWN = "Unknown"
 
@@ -125,11 +121,7 @@ object LegacyStateParser {
     }
 }
 
-/**
- * Parsers for the firmware's HTTP API v1. Field names follow the "HTTP API v1" section of the
- * firmware README; anything the device omits stays null so [DeviceState.merge] keeps whatever the
- * WebSocket frame already supplied.
- */
+/** Missing API fields stay null so they don't erase WebSocket state. */
 object ApiJsonParser {
     const val DEFAULT_PAGE_SIZE = 8
 
@@ -149,10 +141,9 @@ object ApiJsonParser {
     fun state(json: String): DeviceState {
         val root = JSONObject(json)
         val picture = root.optJSONObject("picture")
-        val pictureValid = picture?.boolOrNull("valid") ?: false
-        // Only trust the picture registers once loop() has actually sampled them; before the first
-        // sample the firmware reports valid=false rather than stale zeroes.
-        val readable = picture?.takeIf { pictureValid }
+        val pictureValid = picture?.boolOrNull("valid")
+        // Ignore picture values until loop() has sampled them.
+        val readable = picture?.takeIf { pictureValid == true }
         val presetDigit = root.intOrNull("preset")?.takeIf { it in 0..9 }?.let { '0' + it }
         return DeviceState(
             sequence = root.longOrNull("sequence"),
@@ -225,11 +216,18 @@ object ApiJsonParser {
     fun commandResult(code: Int, body: String): CommandResult {
         val successfulCode = code in 200..299
         val json = runCatching { JSONObject(body.trim()) }.getOrNull()
-            ?: return CommandResult(successfulCode, if (successfulCode) STATUS_ACCEPTED else "http_$code")
-        val status = json.stringOrNull("status") ?: if (successfulCode) STATUS_ACCEPTED else "error"
-        // `ok` is authoritative when present; anything else falls back to the status code.
-        val ok = if (json.has("ok")) json.optBoolean("ok") else successfulCode
-        return CommandResult(ok, status, json.longOrNull("sequence"))
+            ?: return CommandResult(false, if (successfulCode) "invalid_response" else "http_$code")
+        val status = json.stringOrNull("status")
+            ?: return CommandResult(false, if (successfulCode) "invalid_response" else "http_$code")
+        val ok = json.opt("ok") as? Boolean
+            ?: return CommandResult(false, "invalid_response")
+        val sequence = json.longOrNull("sequence")
+        if (ok && ((status != STATUS_ACCEPTED && status != "noop") ||
+                (status == STATUS_ACCEPTED && sequence == null) ||
+                (sequence != null && sequence !in 0..0xffff_ffffL))) {
+            return CommandResult(false, "invalid_response")
+        }
+        return CommandResult(successfulCode && ok, status, sequence)
     }
 
     const val STATUS_ACCEPTED = "accepted"
@@ -246,7 +244,7 @@ object ApiJsonParser {
         if (has(name) && !isNull(name)) optInt(name) else null
 
     private fun JSONObject.longOrNull(name: String): Long? =
-        if (has(name) && !isNull(name)) optLong(name) else null
+        (opt(name) as? Number)?.let { value -> value.toLong().takeIf { it.toDouble() == value.toDouble() } }
 
     private fun JSONObject.boolOrNull(name: String): Boolean? =
         if (has(name) && !isNull(name)) optBoolean(name) else null

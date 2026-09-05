@@ -37,11 +37,11 @@ data class PresetPage(
     val items: List<PresetSlot>,
 )
 
-/** Outcome of a `POST /api/v1/command`; `status` is accepted, noop, invalid, busy or low_memory. */
+/** Reply to a command. */
 data class CommandResult(
     val ok: Boolean,
     val status: String,
-    /** Target main-loop sequence for accepted API commands; null for the legacy transport. */
+    /** Completion sequence; null for legacy commands. */
     val sequence: Long? = null,
 ) {
     val busy: Boolean get() = status == "busy"
@@ -92,26 +92,15 @@ data class AppUiState(
     val presets: List<PresetSlot> = emptyList(),
     val busy: Boolean = false,
     val message: String? = null,
+    val presetFeedback: String? = null,
 )
 
 enum class ControlChannel { ACTION, USER }
 
-/**
- * How an API command is completed from the app's point of view.
- *
- * Incremental controls deliberately do not wait for every target sequence: a held button produces
- * many small adjustments, and confirming each one would serialize the gesture behind state polls.
- */
+/** Held buttons skip per-command confirmation so repeats stay responsive. */
 enum class CommandConfirmation { STANDARD, SLOW, INCREMENTAL }
 
-/**
- * One user action, expressed for both transports.
- *
- * [apiName] is the `name` field of `POST /api/v1/command`, or null when API v1 has no equivalent:
- * pass-through output, the four legacy-only toggles, the frame-lock method switch. API v1 firmware
- * still serves `/sc` and `/uc`, so those commands simply take the legacy route on both firmwares,
- * and nothing is lost by preferring the API wherever it does have an equivalent.
- */
+/** Use the legacy command when [apiName] is null. */
 data class DeviceCommand(
     val apiName: String?,
     val apiValue: String? = null,
